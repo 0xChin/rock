@@ -8,9 +8,6 @@ procs:
   supersim-chain-902:
     cwd: supersim-logs
     shell: wait-port  http://:8420/ready && tail -f anvil-902.log
-  frontend:
-    cwd: packages/frontend
-    shell: pnpm dev
   deploy-contracts:
     cwd: packages/contracts
     shell: pnpm deploy:dev
