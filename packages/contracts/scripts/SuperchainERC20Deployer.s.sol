@@ -4,6 +4,8 @@ pragma solidity ^0.8.25;
 import {Script, console} from "forge-std/Script.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {L2NativeSuperchainERC20} from "../src/L2NativeSuperchainERC20.sol";
+import {Pool} from "../src/Pool.sol";
+import {FlashBorrower} from "../src/FlashBorrower.sol";
 
 contract SuperchainERC20Deployer is Script {
     string deployConfig;
@@ -28,6 +30,8 @@ contract SuperchainERC20Deployer is Script {
 
         address deployedAddress;
         address ownerAddr;
+        address poolAddr;
+        address flashBorrowerAddr;
 
         for (uint256 i = 0; i < chainsToDeployTo.length; i++) {
             string memory chainToDeployTo = chainsToDeployTo[i];
@@ -38,9 +42,12 @@ contract SuperchainERC20Deployer is Script {
             (address _deployedAddress, address _ownerAddr) = deployL2NativeSuperchainERC20();
             deployedAddress = _deployedAddress;
             ownerAddr = _ownerAddr;
+            (address _poolAddr, address _flashBorrowerAddr) = deployFlashLoanContracts(deployedAddress);
+            poolAddr = _poolAddr;
+            flashBorrowerAddr = _flashBorrowerAddr;
         }
 
-        outputDeploymentResult(deployedAddress, ownerAddr);
+        outputDeploymentResult(deployedAddress, ownerAddr, poolAddr, flashBorrowerAddr);
     }
 
     function deployL2NativeSuperchainERC20() public broadcast returns (address addr_, address ownerAddr_) {
@@ -64,12 +71,21 @@ contract SuperchainERC20Deployer is Script {
         }
     }
 
-    function outputDeploymentResult(address deployedAddress, address ownerAddr) public {
+    function deployFlashLoanContracts(address tokenAddress) public broadcast returns (address poolAddr_, address flashBorrowerAddr_) {
+        poolAddr_ = address(new Pool{salt: _implSalt()}(L2NativeSuperchainERC20(tokenAddress)));
+        flashBorrowerAddr_ = address(new FlashBorrower{salt: _implSalt()}());
+        console.log("Deployed Pool at address: ", poolAddr_, "on chain id: ", block.chainid);
+        console.log("Deployed FlashBorrower at address: ", flashBorrowerAddr_, "on chain id: ", block.chainid);
+    }
+
+    function outputDeploymentResult(address deployedAddress, address ownerAddr, address poolAddr, address flashBorrowerAddr) public {
         console.log("Outputting deployment result");
 
         string memory obj = "result";
         vm.serializeAddress(obj, "deployedAddress", deployedAddress);
-        string memory jsonOutput = vm.serializeAddress(obj, "ownerAddress", ownerAddr);
+        vm.serializeAddress(obj, "ownerAddress", ownerAddr);
+        vm.serializeAddress(obj, "poolAddress", poolAddr);
+        string memory jsonOutput = vm.serializeAddress(obj, "flashBorrowerAddress", flashBorrowerAddr);
 
         vm.writeJson(jsonOutput, "deployment.json");
     }

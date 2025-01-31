@@ -15,4 +15,6 @@ const zAddressWithDefault = (defaultAddress: Address) =>
 export const envVars = parseEnv(import.meta.env, {
   VITE_TOKEN_CONTRACT_ADDRESS: zAddressWithDefault(deployment.deployedAddress),
   VITE_TOKEN_MINTER_ADDRESS: zAddressWithDefault(deployment.ownerAddress),
+  VITE_POOL_ADDRESS: zAddressWithDefault(deployment.poolAddress),
+  VITE_FLASH_BORROWER: zAddressWithDefault(deployment.flashBorrowerAddress)
 })
