@@ -2,6 +2,8 @@
 pragma solidity 0.8.25;
 
 import {L2NativeSuperchainERC20} from './L2NativeSuperchainERC20.sol';
+import {SuperchainTokenBridge} from "@optimism/contracts-bedrock/L2/SuperchainTokenBridge.sol";
+import {L2ToL2CrossDomainMessenger} from "@optimism/contracts-bedrock/L2/L2ToL2CrossDomainMessenger.sol";
 
 interface IFlashBorrower {
     /**
@@ -18,14 +20,16 @@ interface IFlashBorrower {
     ) external returns (bytes32);
 }
 
-
 contract Pool {
+    SuperchainTokenBridge public constant SUPERCHAIN_TOKEN_BRIDGE =
+        SuperchainTokenBridge(0x4200000000000000000000000000000000000028);
+    L2ToL2CrossDomainMessenger public constant CROSS_DOMAIN_MESSENGER =
+        L2ToL2CrossDomainMessenger(0x4200000000000000000000000000000000000023);
     bytes32 public constant CALLBACK_SUCCESS = keccak256('ERC3156FlashBorrower.onFlashLoan');
 
     error Pool_CallbackFailed();
 
     L2NativeSuperchainERC20 public immutable token;
-    mapping(address => uint256) public depositsOf;
 
     constructor(L2NativeSuperchainERC20 _token) {
         token = _token;
@@ -33,26 +37,58 @@ contract Pool {
 
     function deposit(uint256 _amount) external {
         token.transferFrom(msg.sender, address(this), _amount);
-        depositsOf[msg.sender] += _amount;
     }
 
-    function withdraw(uint256 _amount) external {
-        depositsOf[msg.sender] -= _amount;
-        token.transfer(msg.sender, _amount);
-    }
-
-    function flashLoan(address _borrower, uint256 _amount) external returns (bool) {
+    function flashLoan(
+        address _borrower,
+        uint256 _amount,
+        uint256 _loanChainId
+    ) external returns (bytes32 _messageId) {
         uint256 _fee = flashFee(_amount);
-        
-        token.transfer(_borrower, _amount);
+        uint256 _maxFlashLoan = maxFlashLoan();
 
-        if (IFlashBorrower(_borrower).onFlashLoan(token, _amount, _fee) != CALLBACK_SUCCESS) {
-            revert Pool_CallbackFailed();
+        if (_maxFlashLoan < _amount) {
+            bytes memory message = abi.encode(_borrower, _amount, block.chainid);
+            _messageId = CROSS_DOMAIN_MESSENGER.sendMessage(
+                _loanChainId,
+                address(this),
+                abi.encodeWithSignature(
+                    "requestTokens(uint256,bytes)",
+                    _amount - _maxFlashLoan,
+                    message
+                )
+            );
+        } else {
+            token.transfer(_borrower, _amount);
+
+            if (IFlashBorrower(_borrower).onFlashLoan(token, _amount, _fee) != CALLBACK_SUCCESS) {
+                revert Pool_CallbackFailed();
+            }
+
+            token.transferFrom(_borrower, address(this), _amount + _fee);
         }
+    }
 
-        token.transferFrom(_borrower, address(this), _amount + _fee);
+    function requestTokens(
+        uint256 _amountToSend,
+        bytes memory _message
+    ) external returns (bytes32 _messageId) {
+        (address _borrower, uint256 _amount, uint256 _chainId) = abi.decode(
+            _message,
+            (address, uint256, uint256)
+        );
 
-        return true;
+        SUPERCHAIN_TOKEN_BRIDGE.sendERC20(address(token), address(this), _amountToSend, _chainId);
+        _messageId = CROSS_DOMAIN_MESSENGER.sendMessage(
+            _chainId,
+            address(this),
+            abi.encodeWithSignature(
+                "flashLoan(address,uint256,uint256)",
+                _borrower,
+                _amountToSend,
+                _chainId
+            )
+        );
     }
 
     function maxFlashLoan() public view returns (uint256) {

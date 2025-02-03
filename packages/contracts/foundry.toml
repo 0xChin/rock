@@ -19,5 +19,6 @@ fs_permissions = [
 remappings = [
   "@interop-lib/=lib/interop-lib/src/",
   "@solady/=lib/solady/src/",
-  "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/"
+  "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+  "@optimism/contracts-bedrock/=lib/optimism/packages/contracts-bedrock/src/"
 ]

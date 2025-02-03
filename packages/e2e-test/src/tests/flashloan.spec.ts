@@ -25,7 +25,7 @@ const l2NativeSuperchainERC20Contract = {
   abi: L2NativeSuperchainERC20Abi,
 } as const
 
-describe('bridge token from L2 to L2', async () => {
+describe('flash loan between L2s', async () => {
   const decimals = await testClientByChain.supersimL2A.readContract({
     ...l2NativeSuperchainERC20Contract,
     functionName: 'decimals',
@@ -58,25 +58,25 @@ describe('bridge token from L2 to L2', async () => {
           args: [testAccount.address, parseUnits('1000', decimals)],
         })
         await client.waitForTransactionReceipt({ hash })
-        
+
         await client.impersonateAccount({
-            address: testAccount.address
+          address: testAccount.address,
         })
         hash = await client.writeContract({
-            account: testAccount,
-            address: envVars.VITE_TOKEN_CONTRACT_ADDRESS,
-            abi: L2NativeSuperchainERC20Abi,
-            functionName: 'approve',
-            args: [envVars.VITE_POOL_ADDRESS, parseUnits('1000', decimals)],
+          account: testAccount,
+          address: envVars.VITE_TOKEN_CONTRACT_ADDRESS,
+          abi: L2NativeSuperchainERC20Abi,
+          functionName: 'approve',
+          args: [envVars.VITE_POOL_ADDRESS, parseUnits('1000', decimals)],
         })
         await client.waitForTransactionReceipt({ hash })
-        
+
         hash = await client.writeContract({
-            account: testAccount,
-            address: envVars.VITE_POOL_ADDRESS,
-            abi: PoolAbi,
-            functionName: 'deposit',
-            args: [parseUnits('1000', decimals)]
+          account: testAccount,
+          address: envVars.VITE_POOL_ADDRESS,
+          abi: PoolAbi,
+          functionName: 'deposit',
+          args: [parseUnits('1000', decimals)],
         })
         await client.waitForTransactionReceipt({ hash })
       }),
@@ -95,31 +95,94 @@ describe('bridge token from L2 to L2', async () => {
   ] as const)(
     'should loan tokens from $destination.chain.id to $source.chain.id',
     async ({ source: sourceClient, destination: destinationClient }) => {
-      const startingSourceBalance = await sourceClient.readContract({
-        ...l2NativeSuperchainERC20Contract,
-        functionName: 'balanceOf',
-        args: [envVars.VITE_POOL_ADDRESS],
-      })
-
-      const amountToLoan = parseUnits('1000', decimals)
+      const amountToLoan = parseUnits('2000', decimals)
+      const chainId = await destinationClient.getChainId()
 
       // Initiate flashloan of 1000 tokens
-      let hash = await sourceClient.writeContract({
+      const hash = await sourceClient.writeContract({
         account: minterAccount,
         address: envVars.VITE_POOL_ADDRESS,
         abi: PoolAbi,
         functionName: 'flashLoan',
-        args: [envVars.VITE_FLASH_BORROWER, amountToLoan],
+        args: [envVars.VITE_FLASH_BORROWER, amountToLoan, BigInt(chainId)],
       })
-      await sourceClient.waitForTransactionReceipt({ hash })
 
-      const endingBalance = await sourceClient.readContract({
+      const receipt = await sourceClient.waitForTransactionReceipt({ hash })
+
+      // Extract the cross-chain message from the flashloan transaction
+      const { sentMessages } = await createInteropSentL2ToL2Messages(
+        // @ts-expect-error
+        sourceClient,
+        { receipt },
+      )
+      expect(sentMessages).toHaveLength(1)
+
+      // Relay the message on the destination chain
+      let relayMessageTxHash = await destinationClient.relayL2ToL2Message({
+        account: testAccount,
+        sentMessageId: sentMessages[0].id,
+        sentMessagePayload: sentMessages[0].payload,
+      })
+
+      let relayMessageReceipt = await destinationClient.waitForTransactionReceipt({
+        hash: relayMessageTxHash,
+      })
+
+      // Verify the message was successfully processed
+      const { successfulMessages: firstSuccessfulMessages } = decodeRelayedL2ToL2Messages({
+        receipt: relayMessageReceipt,
+      })
+      expect(firstSuccessfulMessages).length(1)
+
+      const { sentMessages: relaySentMessages } = await createInteropSentL2ToL2Messages(
+        // @ts-expect-error
+        destinationClient,
+        { receipt: relayMessageReceipt },
+      )
+
+      expect(relaySentMessages).toHaveLength(2)
+
+      // Relay the message on the destination chain
+      relayMessageTxHash = await sourceClient.relayL2ToL2Message({
+        account: testAccount,
+        sentMessageId: relaySentMessages[0].id,
+        sentMessagePayload: relaySentMessages[0].payload,
+      })
+
+      relayMessageReceipt = await sourceClient.waitForTransactionReceipt({
+        hash: relayMessageTxHash,
+      })
+
+      // Verify the message was successfully processed
+      const { successfulMessages: secondSuccessfulMessages } = decodeRelayedL2ToL2Messages({
+        receipt: relayMessageReceipt,
+      })
+      expect(secondSuccessfulMessages).length(1)
+
+      // Relay the message on the destination chain
+      relayMessageTxHash = await sourceClient.relayL2ToL2Message({
+        account: testAccount,
+        sentMessageId: relaySentMessages[1].id,
+        sentMessagePayload: relaySentMessages[1].payload,
+      })
+
+      relayMessageReceipt = await sourceClient.waitForTransactionReceipt({
+        hash: relayMessageTxHash,
+      })
+
+      // Verify the message was successfully processed
+      const { successfulMessages: thirdSuccessfulMessages } = decodeRelayedL2ToL2Messages({
+        receipt: relayMessageReceipt,
+      })
+      expect(thirdSuccessfulMessages).length(1)
+
+      const sourceBalance = await sourceClient.readContract({
         ...l2NativeSuperchainERC20Contract,
         functionName: 'balanceOf',
         args: [envVars.VITE_POOL_ADDRESS],
       })
 
-      expect(endingBalance).toEqual(startingSourceBalance)
+      expect(sourceBalance).toEqual(amountToLoan)
     },
   )
 })
